@@ -1,0 +1,10 @@
+{{- if .Values.ingress.middlewares }}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: beta-auth
+  namespace: {{ .Values.namespace }}
+spec:
+  basicAuth:
+    secret: beta-basic-auth
+{{- end }}

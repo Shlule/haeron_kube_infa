@@ -1,0 +1,12 @@
+environment: beta
+namespace: haeron-beta
+
+backend:
+  name: haeron-backend-beta
+  image:
+    tag: beta-latest
+
+ingress:
+  host: haeron-backend.beta
+  middlewares:
+    - "haeron-beta-beta-auth@kubernetescrd"
