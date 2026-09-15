@@ -1,0 +1,49 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vault-tls
+  namespace: haeron
+spec:
+  secretName: vault-tls-secret
+  issuerRef:
+    name: letsencrypt-dns-ovh
+    kind: ClusterIssuer
+  dnsNames:
+    - vault.haeron-music.com
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: vault-auth
+  namespace: haeron
+spec:
+  basicAuth:
+    secret: vault-basic-auth
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vault-ui
+  namespace: haeron
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: haeron-vault-auth@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - vault.haeron-music.com
+      secretName: vault-tls-secret
+  rules:
+    - host: vault.haeron-music.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vault
+                port:
+                  number: 8200

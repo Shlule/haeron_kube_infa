@@ -1,0 +1,48 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vault-tls
+  namespace: {{ .Values.namespace }}
+spec:
+  secretName: vault-tls-secret
+  issuerRef:
+    name: letsencrypt-dns-ovh
+    kind: ClusterIssuer
+  dnsNames:
+    - {{ .Values.vault.host }}
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: vault-auth
+  namespace: {{ .Values.namespace }}
+spec:
+  basicAuth:
+    secret: vault-basic-auth
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vault-ui
+  namespace: {{ .Values.namespace }}
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: {{ .Values.namespace }}-vault-auth@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - {{ .Values.vault.host }}
+      secretName: vault-tls-secret
+  rules:
+    - host: {{ .Values.vault.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vault
+                port:
+                  number: 8200

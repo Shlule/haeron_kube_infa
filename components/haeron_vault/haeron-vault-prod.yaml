@@ -1,0 +1,233 @@
+# =========================================================
+# CONFIGMAP — fichier de configuration Vault (vault.hcl)
+# Contient uniquement de la config non-sensible (pas de secrets)
+# Sera monté comme un vrai fichier dans le conteneur Vault
+# =========================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-config
+  namespace: haeron
+data:
+  vault.hcl: |
+    ui = true                        # active l'interface web de Vault (accessible via le port 8200)
+
+    listener "tcp" {
+      address     = "[::]:8200"      # Vault écoute sur toutes les interfaces, port 8200 (API/clients)
+      tls_disable = 1                # TLS désactivé ici (test interne) — à activer en vraie prod exposée
+    }
+
+    storage "raft" {
+      path    = "/vault/data"        # où Vault stocke ses données chiffrées (= le volume monté du PVC)
+      node_id = "POD_NAME_PLACEHOLDER"            # identifiant unique de ce nœud dans le cluster raft
+      #  retry_join ici car plusieurs replicas
+
+      retry_join {
+        leader_api_addr = "http://vault-0.vault-internal:8200"
+      }
+      retry_join {
+        leader_api_addr = "http://vault-1.vault-internal:8200"
+      }
+      retry_join {
+        leader_api_addr = "http://vault-2.vault-internal:8200"
+      }
+    }
+
+    # Adresse que Vault annonce aux clients pour le joindre
+    api_addr     = "http://POD_NAME_PLACEHOLDER.vault-internal:8200"
+    # Adresse utilisée entre nœuds Vault pour la réplication raft (inutile à 1 replica, mais prêt pour la HA)
+    cluster_addr = "http://POD_NAME_PLACEHOLDER.vault-internal:8201"
+
+    # Permet à Vault de mettre à jour son propre statut (leader/standby/sealed) 
+    # comme label sur son propre pod Kubernetes
+    service_registration "kubernetes" {}
+
+---
+# =========================================================
+# SERVICEACCOUNT — identité du pod Vault pour parler à l'API Kubernetes
+# Ne contient aucune permission en soi, juste une identité
+# =========================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault
+  namespace: haeron
+
+---
+# =========================================================
+# CLUSTERROLEBINDING — permission d'auth-delegator
+# Nécessaire pour la future auth Kubernetes : permet à Vault de vérifier
+# la validité des JWT de ServiceAccounts d'autres pods (ex: ton backend)
+# ClusterRole = valide sur tout le cluster, pas juste "haeron" 
+# (utile si un jour ton backend est dans un autre namespace)
+# =========================================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-server-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator   # rôle intégré à Kubernetes, pas créé par nous
+subjects:
+  - kind: ServiceAccount
+    name: vault
+    namespace: haeron
+
+---
+# =========================================================
+# ROLE + ROLEBINDING — permission de lire/modifier son propre pod
+# Nécessaire pour que service_registration "kubernetes" fonctionne
+# (sans ça : warning 403 dans les logs, comme observé)
+# Role = limité au namespace "haeron" uniquement (contrairement au ClusterRole ci-dessus)
+# =========================================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vault-service-registration
+  namespace: haeron
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vault-service-registration-binding
+  namespace: haeron
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vault-service-registration
+subjects:
+  - kind: ServiceAccount
+    name: vault
+    namespace: haeron
+
+---
+# =========================================================
+# SERVICE HEADLESS — communication interne entre nœuds Vault (raft)
+# clusterIP: None = pas de load-balancing, DNS individuel par pod
+# (vault-0.vault-internal, vault-1.vault-internal, etc.)
+# N'est JAMAIS utilisé par ton backend, uniquement par Vault lui-même
+# =========================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault-internal
+  namespace: haeron
+  labels:
+    app: vault
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true   # garde le pod joignable même s'il n'est pas encore "Ready"
+                                    # (indispensable puisque Vault n'est jamais "Ready" tant que sealed)
+  selector:
+    app: vault
+  ports:
+    - name: http
+      port: 8200      # API Vault (utile si un autre nœud veut y accéder directement)
+    - name: internal
+      port: 8201      # port raft (réplication, élection de leader)
+
+---
+# =========================================================
+# SERVICE NORMAL — point d'entrée pour les clients (ton backend)
+# Fait du load-balancing classique (utile si un jour plusieurs replicas)
+# C'est CETTE adresse que VAULT_ADDR doit utiliser : http://vault:8200
+# =========================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+  namespace: haeron
+  labels:
+    app: vault
+spec:
+  selector:
+    app: vault
+  ports:
+    - name: http
+      port: 8200
+      targetPort: 8200
+
+---
+# =========================================================
+# STATEFULSET — le pod Vault lui-même, avec identité stable et stockage persistant
+# StatefulSet (plutôt que Deployment) car Vault a besoin :
+#  - d'un nom de pod stable et prévisible (vault-0, vault-1...)
+#  - d'un volume dédié et persistant par pod (via volumeClaimTemplates)
+# =========================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vault
+  namespace: haeron
+spec:
+  serviceName: vault-internal   # lie ce StatefulSet au Service headless (pour le DNS par pod)
+  replicas: 3                   # un seul nœud pour l'instant — passera à 3 pour la HA plus tard
+  selector:
+    matchLabels:
+      app: vault
+  template:
+    metadata:
+      labels:
+        app: vault
+    spec:
+      serviceAccountName: vault   # associe l'identité créée plus haut à ce pod
+      containers:
+        - name: vault
+          image: hashicorp/vault:1.17
+          command:
+            - "/bin/sh"
+            - "-c"
+            - |
+              sed "s/POD_NAME_PLACEHOLDER/${VAULT_K8S_POD_NAME}/g" /vault/config/vault.hcl > /tmp/vault.hcl
+              exec vault server -config=/tmp/vault.hcl
+          securityContext:
+            capabilities:
+              add: ["IPC_LOCK"]   # empêche la mémoire de Vault d'être swappée sur disque
+                                  # (sécurité : la clé de déchiffrement ne doit jamais toucher le disque)
+          ports:
+            - containerPort: 8200
+              name: http
+            - containerPort: 8201
+              name: internal
+          env:
+            - name: VAULT_ADDR
+              value: "http://127.0.0.1:8200"   # utilisé par les commandes vault CLI internes au pod
+            - name: VAULT_K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace   # récupère dynamiquement "haeron"
+            - name: VAULT_K8S_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name        # récupère dynamiquement "vault-0"
+          volumeMounts:
+            - name: config
+              mountPath: /vault/config   # le fichier vault.hcl du ConfigMap apparaît ici
+            - name: data
+              mountPath: /vault/data     # les données chiffrées persistantes (raft) sont ici
+          readinessProbe:
+            httpGet:
+              path: /v1/sys/health?standbyok=true   # Vault répond 200 uniquement s'il est unsealed
+              port: 8200
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: config
+          configMap:
+            name: vault-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]   # un seul pod peut monter ce volume à la fois
+        resources:
+          requests:
+            storage: 1Gi                 # taille du disque persistant, ajustable
+        # storageClassName non précisé ici : utilise "local-path" (default sur ton cluster k3s)
+
+

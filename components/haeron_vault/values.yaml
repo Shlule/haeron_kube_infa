@@ -1,0 +1,7 @@
+namespace: haeron
+vault:
+  host: vault.haeron-music.com
+
+acme:
+  email: <TON_EMAIL>
+  groupName: acme.haeron.local
