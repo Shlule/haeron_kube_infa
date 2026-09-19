@@ -21,6 +21,7 @@ k3s protège son kubeconfig par défaut. Corriger les permissions et le rendre a
 mkdir -p ~/.kube
 sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
 sudo chown $(whoami):$(whoami) ~/.kube/config
+export KUBECONFIG=~/.kube/config
 kubectl get nodes   # doit afficher le nœud sans erreur
 ```
 
@@ -39,7 +40,7 @@ kubectl create namespace haeron
 ### 2.1 Appliquer la configuration Vault
 
 ```bash
-kubectl apply -f vault/haeron-vault.yaml
+kubectl apply -f components/haeron_vault/haeron-vault-prod.yaml
 ```
 
 Ce fichier contient : ConfigMap (vault.hcl), ServiceAccount, RBAC, Services (vault + vault-internal), StatefulSet (3 replicas).
@@ -67,7 +68,21 @@ Ces valeurs ne sont affichées qu'une seule fois et ne sont récupérables nulle
 ### 2.4 Unseal les 3 nœuds
 
 ```bash
-for pod in vault-0 vault-1 vault-2; do
+for pod in vault-0 ; do
+  kubectl exec -it $pod -n haeron -- vault operator unseal <clé-1>
+  kubectl exec -it $pod -n haeron -- vault operator unseal <clé-2>
+  kubectl exec -it $pod -n haeron -- vault operator unseal <clé-3>
+done
+```
+```bash
+for pod in vault-1 ; do
+  kubectl exec -it $pod -n haeron -- vault operator unseal <clé-1>
+  kubectl exec -it $pod -n haeron -- vault operator unseal <clé-2>
+  kubectl exec -it $pod -n haeron -- vault operator unseal <clé-3>
+done
+```
+```bash
+for pod in vault-2 ; do
   kubectl exec -it $pod -n haeron -- vault operator unseal <clé-1>
   kubectl exec -it $pod -n haeron -- vault operator unseal <clé-2>
   kubectl exec -it $pod -n haeron -- vault operator unseal <clé-3>
@@ -126,13 +141,20 @@ en suivant le .env.example ecrire un fichier et ensuite faire
 
 ```bash
 kubectl create secret generic haeron-backend-secret \
---from-file<nom_du_fichier>
+--from-env-file=<nom_du_fichier>\
+-n haeron
 ```
 
-
 ---
-
 ## 4. Déployer le backend (Helm)
+
+### 4.1 adopt haeron namespace
+
+```bash
+kubectl label namespace haeron app.kubernetes.io/managed-by=Helm
+kubectl annotate namespace haeron meta.helm.sh/release-name=haeron-prod
+kubectl annotate namespace haeron meta.helm.sh/release-namespace=haeron
+```
 
 ```bash
 helm install haeron-prod ./components/haeron_backend \
