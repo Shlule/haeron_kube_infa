@@ -1,0 +1,5 @@
+apiVersion: v2
+name: haeron-auth-guitar
+description: Chart Helm pour le frontend Haeron (Nuxt statique servi par Nginx)
+type: application
+version: 0.1.0

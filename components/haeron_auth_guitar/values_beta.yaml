@@ -1,0 +1,11 @@
+namespace: haeron-beta
+
+frontend:
+  name: haeron-auth-guitar-beta
+  image:
+    tag: beta-latest
+
+ingress:
+  host: app.haeron-music.beta
+  middlewares:
+    - "haeron-beta-beta-auth@kubernetescrd"

@@ -1,0 +1,10 @@
+namespace: haeron
+
+frontend:
+  name: haeron-auht-guitar
+  image:
+    tag: prod-latest
+
+ingress:
+  host: app.haeron-music.com
+  middlewares: []
