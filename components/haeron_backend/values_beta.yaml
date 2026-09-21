@@ -7,6 +7,6 @@ backend:
     tag: beta-latest
 
 ingress:
-  host: haeron-backend.beta
+  host: api.haeron-music.beta
   middlewares:
     - "haeron-beta-beta-auth@kubernetescrd"

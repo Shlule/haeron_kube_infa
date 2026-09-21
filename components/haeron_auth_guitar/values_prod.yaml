@@ -6,5 +6,5 @@ frontend:
     tag: prod-latest
 
 ingress:
-  host: app.haeron-music.com
+  host: guitar.auth.haeron-music.com
   middlewares: []

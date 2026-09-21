@@ -7,5 +7,5 @@ backend:
     tag: d5c740dc1148fff87c77b6c2e9cb674e5f889e6d
 
 ingress:
-  host: api.haeron.local
+  host: api.haeron-music.com
   middlewares: []
