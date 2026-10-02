@@ -4,12 +4,16 @@ kind: Ingress
 metadata:
   name: {{ include "haeron-backend.fullname" . }}
   namespace: {{ .Values.namespace }}
-  {{- if .Values.ingress.middlewares }}
   annotations:
+    traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
+    {{- if .Values.ingress.middlewares }}
     traefik.ingress.kubernetes.io/router.middlewares: {{ join "," .Values.ingress.middlewares }}
-  {{- end }}
+    {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host }}
   rules:
     - host: {{ .Values.ingress.host }}
       http:
