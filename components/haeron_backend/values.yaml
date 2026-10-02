@@ -21,7 +21,7 @@ service:
 ingress:
   enabled: true
   className: traefik
-  host: api.haeron.local
+  host: api.haeron-music.com
   middlewares: []          # liste vide par défaut (pas d'auth en prod)
 
 redis:

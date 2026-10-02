@@ -4,7 +4,7 @@ frontend:
   name: haeron-auth-guitar
   replicas: 1
   image:
-    repository: ghcr.io/shlule/haeron_auth_frontend
+    repository: ghcr.io/shlule/haeron_auth_guitar
     tag: latest
   containerPort: 80
   imagePullSecret: ghcr-secret
