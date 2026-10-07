@@ -1,0 +1,103 @@
+# CronJob de sauvegarde Vault (Raft) -> chiffrement GPG -> OVH Object Storage
+# Rétention : 1/jour pendant 7 jours, puis 1 tous les 14 jours, max 2 ans (730 j), le reste est supprimé.
+#
+# Prérequis (voir instructions) :
+#   kubectl -n haeron create configmap vault-retention --from-file=vault-retention.py
+#   kubectl -n haeron create secret generic vault-backup-secrets \
+#       --from-literal=VAULT_TOKEN=hvs.xxx \
+#       --from-literal=GPG_PASSPHRASE='...' \
+#       --from-literal=AWS_ACCESS_KEY_ID=... \
+#       --from-literal=AWS_SECRET_ACCESS_KEY=...
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vault-backup
+  namespace: haeron
+spec:
+  schedule: "0 3 * * *"
+  timeZone: "Europe/Paris"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          restartPolicy: OnFailure
+          volumes:
+            - name: work
+              emptyDir: {}
+            - name: retention
+              configMap:
+                name: vault-retention
+          initContainers:
+            # 1) snapshot Raft pris via l'API sur le leader (service vault-active)
+            - name: snapshot
+              image: hashicorp/vault:1.17
+              env:
+                - name: VAULT_ADDR
+                  value: "http://vault-active.haeron.svc:8200"   # à vérifier (nom du service / http ou https)
+                - name: VAULT_TOKEN
+                  valueFrom:
+                    secretKeyRef: { name: vault-backup-secrets, key: VAULT_TOKEN }
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  vault token renew-self >/dev/null 2>&1 || echo "WARN: renew-self impossible"
+                  vault operator raft snapshot save /work/vault.snap
+                  SIZE=$(wc -c < /work/vault.snap)
+                  [ "$SIZE" -ge 1024 ] || { echo "snapshot suspect ($SIZE octets)"; exit 1; }
+                  echo "snapshot OK ($SIZE octets)"
+              volumeMounts:
+                - { name: work, mountPath: /work }
+          containers:
+            # 2) chiffrement + envoi + rétention
+            - name: upload
+              image: python:3.12-alpine
+              env:
+                - name: BUCKET_NAME
+                  value: eatable-alexander
+                - name: ENDPOINT
+                  value: https://s3.gra.io.cloud.ovh.net
+                - name: AWS_DEFAULT_REGION
+                  value: gra
+                - name: MAX_AGE_DAYS
+                  value: "730"
+                - name: GPG_PASSPHRASE
+                  valueFrom:
+                    secretKeyRef: { name: vault-backup-secrets, key: GPG_PASSPHRASE }
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef: { name: vault-backup-secrets, key: AWS_ACCESS_KEY_ID }
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef: { name: vault-backup-secrets, key: AWS_SECRET_ACCESS_KEY }
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  apk add --no-cache gnupg aws-cli >/dev/null
+                  KEY="vault-$(date -u +%Y%m%d-%H%M%S).snap.gpg"
+                  printf '%s' "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
+                      --passphrase-fd 0 --symmetric --cipher-algo AES256 \
+                      -o "/work/$KEY" /work/vault.snap
+                  rm -f /work/vault.snap
+                  aws s3 cp "/work/$KEY" "s3://$BUCKET_NAME/$KEY" --endpoint-url "$ENDPOINT" --only-show-errors
+                  aws s3api head-object --bucket "$BUCKET_NAME" --key "$KEY" --endpoint-url "$ENDPOINT" >/dev/null
+                  echo "envoyé: $KEY"
+                  aws s3api list-objects-v2 --bucket "$BUCKET_NAME" --endpoint-url "$ENDPOINT" \
+                      --query 'Contents[].Key' --output text | tr '\t' '\n' \
+                    | python3 /retention/vault-retention.py --max-age-days "$MAX_AGE_DAYS" > /work/to_delete.txt
+                  while IFS= read -r k; do
+                    [ -n "$k" ] || continue
+                    echo "suppression: $k"
+                    aws s3 rm "s3://$BUCKET_NAME/$k" --endpoint-url "$ENDPOINT" --only-show-errors
+                  done < /work/to_delete.txt
+                  echo "terminé"
+              volumeMounts:
+                - { name: work, mountPath: /work }
+                - { name: retention, mountPath: /retention }

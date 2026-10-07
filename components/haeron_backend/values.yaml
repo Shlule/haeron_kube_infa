@@ -3,6 +3,10 @@ environment: prod
 
 namespace: haeron
 
+serviceAccount:
+  create: true
+  name: haeron-backend
+
 backend:
   name: haeron-backend
   replicas: 1

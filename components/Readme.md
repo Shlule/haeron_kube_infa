@@ -104,21 +104,46 @@ kubectl exec -it vault-1 -n haeron -- vault login <root-token>
 kubectl exec -it vault-1 -n haeron -- vault secrets enable -path=secret kv-v2
 ```
 
-### 2.7 Créer la policy et le token dédiés au backend
+### 2.7 Policy et rôle Kubernetes pour le backend
+
+Le backend s'authentifie avec son ServiceAccount (aucun token à stocker ni à renouveler).
 
 ```bash
-kubectl exec -it vault-1 -n haeron -- vault policy write haeron-backend-policy - <<EOF
-path "secret/data/haeron-backend" {
-  capabilities = ["read"]
-}
+kubectl exec -it vault-0 -n haeron -- sh
+vault login    # root token
+
+vault auth enable kubernetes
+vault write auth/kubernetes/config kubernetes_host="https://kubernetes.default.svc:443"
+
+vault policy write haeron-backend-policy - <<'EOF'
+# secrets "domain"
+path "secret/data/domain"       { capabilities = ["create", "read", "update"] }
+path "secret/data/domain/*"     { capabilities = ["create", "read", "update"] }
+path "secret/metadata/domain"   { capabilities = ["read", "list"] }
+path "secret/metadata/domain/*" { capabilities = ["read", "list"] }
+
+# secrets "batch"
+path "secret/data/batch"        { capabilities = ["create", "read", "update"] }
+path "secret/data/batch/*"      { capabilities = ["create", "read", "update"] }
+path "secret/metadata/batch"    { capabilities = ["read", "list"] }
+path "secret/metadata/batch/*"  { capabilities = ["read", "list"] }
 EOF
 
-kubectl exec -it vault-1 -n haeron -- vault token create -policy=haeron-backend-policy -ttl=768h
+vault write auth/kubernetes/role/haeron-backend \
+  bound_service_account_names=haeron-backend \
+  bound_service_account_namespaces=haeron \
+  policies=haeron-backend-policy \
+  ttl=1h
 ```
 
-⚠️ Sauvegarder ce token (différent du root token) — c'est celui qui ira dans le secret du backend, à l'étape 3.
+⚠️ Il n'y a plus de token à sauvegarder : le secret Kubernetes du backend ne contient plus `VAULT_TOKEN`.
+Le Deployment du backend doit utiliser `serviceAccountName: haeron-backend`, et le code se connecte avec
+`client.auth.kubernetes.login(role="haeron-backend", jwt=...)`.
 
----
+## 2.8 setup Vault retention
+
+Voir [la procédure de sauvegarde Vault](README-vault-retention.md).
+
 
 ## 3. Créer les secrets du backend
 
