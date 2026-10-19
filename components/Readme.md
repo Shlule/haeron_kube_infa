@@ -116,19 +116,18 @@ vault auth enable kubernetes
 vault write auth/kubernetes/config kubernetes_host="https://kubernetes.default.svc:443"
 
 vault policy write haeron-backend-policy - <<'EOF'
-# secrets "domain"
-path "secret/data/domain"       { capabilities = ["create", "read", "update"] }
-path "secret/data/domain/*"     { capabilities = ["create", "read", "update"] }
-path "secret/metadata/domain"   { capabilities = ["read", "list"] }
-path "secret/metadata/domain/*" { capabilities = ["read", "list"] }
+# secrets "domain" (chemin interne : secret/domain/...)
+path "secret/data/secret/domain"       { capabilities = ["create", "read", "update"] }
+path "secret/data/secret/domain/*"     { capabilities = ["create", "read", "update"] }
+path "secret/metadata/secret/domain"   { capabilities = ["read", "list"] }
+path "secret/metadata/secret/domain/*" { capabilities = ["read", "list"] }
 
-# secrets "batch"
-path "secret/data/batch"        { capabilities = ["create", "read", "update"] }
-path "secret/data/batch/*"      { capabilities = ["create", "read", "update"] }
-path "secret/metadata/batch"    { capabilities = ["read", "list"] }
-path "secret/metadata/batch/*"  { capabilities = ["read", "list"] }
+# secrets "batch" (chemin interne : secret/batch/...)
+path "secret/data/secret/batch"        { capabilities = ["create", "read", "update"] }
+path "secret/data/secret/batch/*"      { capabilities = ["create", "read", "update"] }
+path "secret/metadata/secret/batch"    { capabilities = ["read", "list"] }
+path "secret/metadata/secret/batch/*"  { capabilities = ["read", "list"] }
 EOF
-
 vault write auth/kubernetes/role/haeron-backend \
   bound_service_account_names=haeron-backend \
   bound_service_account_namespaces=haeron \
